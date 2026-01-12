@@ -1,7 +1,7 @@
 # Dependencies
 node_modules/
 
-# Environment variables (keep .env.test as template)
+# Environment variables
 .env
 .env.local
 .env.*.local
@@ -23,3 +23,6 @@ bun.lock
 
 # Logs
 *.log
+
+# Keep .env.test as template
+!.env.test

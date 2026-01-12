@@ -1,22 +1,16 @@
 {
   "name": "o-calorista",
   "version": "1.0.0",
-  "description": "A WhatsApp-based calorie counting assistant powered by Bun",
-  "main": "src/index.ts",
-  "type": "module",
+  "private": true,
+  "description": "A WhatsApp-based calorie counting assistant",
+  "workspaces": [
+    "server",
+    "frontend",
+    "infrastructure"
+  ],
   "scripts": {
-    "dev": "bun run --watch src/server.ts",
-    "start": "bun run src/server.ts",
-    "test": "bun test",
-    "lookup": "bun run src/index.ts",
-    "send-message": "bun run src/send-message.ts"
-  },
-  "dependencies": {
-    "cheerio": "^1.0.0",
-    "openai": "^4.77.0"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.7.2"
+    "server:dev": "cd server && bun run dev",
+    "server:start": "cd server && bun run start",
+    "server:test": "cd server && bun test"
   }
 }
