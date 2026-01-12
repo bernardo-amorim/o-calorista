@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment variables (keep .env.test as template)
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+
+# Bun
+bun.lock
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
