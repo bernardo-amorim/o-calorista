@@ -21,8 +21,11 @@ FROM oven/bun:1-slim AS production
 
 WORKDIR /app
 
-# Create non-root user (using groupadd/useradd for Debian-based image)
-RUN groupadd --system --gid 1001 nodejs && \
+# Install curl for health checks and create non-root user
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --system --gid 1001 nodejs && \
     useradd --system --uid 1001 --gid nodejs bunjs
 
 # Copy built application
