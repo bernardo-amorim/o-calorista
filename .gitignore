@@ -26,3 +26,21 @@ bun.lock
 
 # Keep .env.test as template
 !.env.test
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Keep terraform.tfvars as they contain non-sensitive defaults
+# Sensitive values should be in terraform.tfvars.local (ignored)
+*.tfvars.local

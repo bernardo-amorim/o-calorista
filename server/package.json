@@ -9,7 +9,8 @@
     "start": "bun run src/server.ts",
     "test": "bun test",
     "lookup": "bun run src/index.ts",
-    "send-message": "bun run src/send-message.ts"
+    "send-message": "bun run src/send-message.ts",
+    "sync-secrets": "bun run scripts/sync-secrets.ts"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
