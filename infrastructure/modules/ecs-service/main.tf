@@ -9,6 +9,25 @@ data "aws_route53_zone" "main" {
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+# Look up secrets by name
+data "aws_secretsmanager_secret" "app_secrets" {
+  for_each = { for s in var.secret_names : s.env_var_name => s }
+  name     = "${var.project_name}/${var.environment}/${each.value.secret_name}"
+}
+
+locals {
+  # Combine directly-specified secrets with looked-up secrets
+  all_secrets = concat(
+    var.secrets,
+    [
+      for s in var.secret_names : {
+        name       = s.env_var_name
+        value_from = data.aws_secretsmanager_secret.app_secrets[s.env_var_name].arn
+      }
+    ]
+  )
+}
+
 # ECR Repository
 resource "aws_ecr_repository" "app" {
   name                 = "${var.project_name}-${var.environment}"
@@ -236,6 +255,26 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# IAM Policy to allow ECS to read secrets from Secrets Manager
+resource "aws_iam_role_policy" "ecs_secrets_access" {
+  count = length(local.all_secrets) > 0 ? 1 : 0
+  name  = "${var.project_name}-${var.environment}-ecs-secrets-access"
+  role  = aws_iam_role.ecs_task_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [for s in local.all_secrets : s.value_from]
+      }
+    ]
+  })
+}
+
 # IAM Role for ECS Task
 resource "aws_iam_role" "ecs_task" {
   name = "${var.project_name}-${var.environment}-ecs-task"
@@ -296,7 +335,7 @@ resource "aws_ecs_task_definition" "app" {
       ]
 
       secrets = [
-        for secret in var.secrets : {
+        for secret in local.all_secrets : {
           name      = secret.name
           valueFrom = secret.value_from
         }

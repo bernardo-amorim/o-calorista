@@ -62,6 +62,7 @@ module "ecs_service" {
   task_memory                 = var.task_memory
   desired_count               = var.desired_count
   secrets                     = var.secrets
+  secret_names                = var.secret_names
 
   # GitHub Actions CI/CD
   enable_github_oidc          = var.enable_github_oidc

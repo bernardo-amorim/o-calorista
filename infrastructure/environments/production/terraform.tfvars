@@ -19,30 +19,17 @@ task_cpu       = 256
 task_memory    = 512
 desired_count  = 1
 
-# Secrets (configure these after creating secrets in AWS Secrets Manager)
-# Example:
-# secrets = [
-#   {
-#     name       = "OPENAI_API_KEY"
-#     value_from = "arn:aws:secretsmanager:us-east-1:123456789:secret:ocalorista/production/openai-key"
-#   },
-#   {
-#     name       = "WHATSAPP_ACCESS_TOKEN"
-#     value_from = "arn:aws:secretsmanager:us-east-1:123456789:secret:ocalorista/production/whatsapp-token"
-#   },
-#   {
-#     name       = "WHATSAPP_PHONE_NUMBER_ID"
-#     value_from = "arn:aws:secretsmanager:us-east-1:123456789:secret:ocalorista/production/whatsapp-phone-id"
-#   },
-#   {
-#     name       = "WHATSAPP_VERIFY_TOKEN"
-#     value_from = "arn:aws:secretsmanager:us-east-1:123456789:secret:ocalorista/production/whatsapp-verify-token"
-#   },
-#   {
-#     name       = "META_APP_SECRET"
-#     value_from = "arn:aws:secretsmanager:us-east-1:123456789:secret:ocalorista/production/meta-app-secret"
-#   }
-# ]
+# Secrets - automatically looked up from Secrets Manager by name
+# These map environment variable names to secret names created by `bun run sync-secrets`
+secret_names = [
+  { env_var_name = "OPENAI_API_KEY", secret_name = "openai-api-key" },
+  { env_var_name = "WHATSAPP_ACCESS_TOKEN", secret_name = "whatsapp-access-token" },
+  { env_var_name = "WHATSAPP_PHONE_NUMBER_ID", secret_name = "whatsapp-phone-number-id" },
+  { env_var_name = "WHATSAPP_VERIFY_TOKEN", secret_name = "whatsapp-verify-token" },
+  { env_var_name = "META_APP_SECRET", secret_name = "meta-app-secret" },
+]
+
+# Legacy format (if you need to specify full ARNs manually)
 secrets = []
 
 # GitHub Actions CI/CD

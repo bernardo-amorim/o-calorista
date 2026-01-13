@@ -66,10 +66,19 @@ variable "desired_count" {
 }
 
 variable "secrets" {
-  description = "List of secrets to inject into the container"
+  description = "List of secrets to inject into the container (full ARN format)"
   type = list(object({
     name       = string
     value_from = string
+  }))
+  default = []
+}
+
+variable "secret_names" {
+  description = "List of secret names in Secrets Manager to inject (uses naming convention: {project}/{env}/{name})"
+  type = list(object({
+    env_var_name = string
+    secret_name  = string
   }))
   default = []
 }
