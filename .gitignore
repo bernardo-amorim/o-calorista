@@ -9,8 +9,8 @@ node_modules/
 # Build output
 dist/
 
-# Bun
-bun.lock
+# Bun (lock file should be committed for reproducible builds)
+# bun.lock
 
 # OS files
 .DS_Store
