@@ -14,9 +14,11 @@
 
 import crypto from "crypto";
 import OpenAI from "openai";
+import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import { desc, eq } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./send-message";
 import { getAggregateNutritionalValues } from "./fatsecret";
-import { db, chatMessage } from "./db";
+import { db, chatMessage, type ChatMessage } from "./db";
 import type { FoodItem, AggregateNutritionalResponse } from "./types";
 
 // Environment variables (typed in env.d.ts, Bun automatically loads .env files)
@@ -103,82 +105,70 @@ function handleVerification(req: Request): Response {
 }
 
 /**
- * Schema for meal parsing response from OpenAI
+ * System prompt for O Calorista assistant
  */
-interface MealParseResponse {
-  items: Array<{
-    foodName: string;
-    serving: string;
-  }>;
+const SYSTEM_PROMPT = `Você é O Calorista, um assistente nutricional brasileiro amigável e útil no WhatsApp.
+
+Sua especialidade é ajudar usuários a entender o valor nutricional das refeições que eles consomem.
+
+Quando o usuário descrever uma refeição ou alimentos, use a ferramenta "analyze_meal" para obter as informações nutricionais detalhadas. A ferramenta aceita uma descrição em linguagem natural da refeição.
+
+Seja conversacional, amigável, e use emojis ocasionalmente. Responda sempre em português brasileiro.
+
+Se o usuário perguntar algo que não seja relacionado a nutrição/alimentação, você pode responder brevemente mas sempre tente trazer a conversa de volta para ajudá-lo com suas metas nutricionais.
+
+Dicas importantes:
+- Sempre pergunte sobre porções se o usuário não especificar
+- Ofereça dicas nutricionais quando relevante
+- Seja encorajador sobre escolhas alimentares saudáveis
+- Não julgue escolhas menos saudáveis, apenas informe`;
+
+/**
+ * Tool definition for meal analysis
+ */
+const ANALYZE_MEAL_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "analyze_meal",
+    description: "Analisa uma refeição e retorna informações nutricionais detalhadas. Use quando o usuário descrever alimentos ou uma refeição.",
+    parameters: {
+      type: "object",
+      properties: {
+        meal_description: {
+          type: "string",
+          description: "Descrição da refeição em linguagem natural, incluindo os alimentos e porções. Exemplo: '2 ovos fritos, 100g de arroz branco e uma banana'",
+        },
+      },
+      required: ["meal_description"],
+    },
+  },
+};
+
+/**
+ * Fetches the last N messages for a phone number from the database
+ */
+async function getConversationHistory(phoneNumber: string, limit: number = 100): Promise<ChatMessage[]> {
+  const messages = await db
+    .select()
+    .from(chatMessage)
+    .where(eq(chatMessage.phoneNumber, phoneNumber))
+    .orderBy(desc(chatMessage.createdAt))
+    .limit(limit);
+  
+  // Return in chronological order (oldest first)
+  return messages.reverse();
 }
 
 /**
- * Uses OpenAI to parse a meal description into food items with serving sizes
+ * Converts database messages to OpenAI chat format
  */
-async function parseMealDescription(mealDescription: string): Promise<FoodItem[]> {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content: `Você é um assistente que ajuda a extrair itens alimentares de descrições de refeições.
-Sua tarefa é identificar cada alimento mencionado e estimar a porção.
-Retorne os alimentos em português brasileiro, com nomes simples que seriam encontrados em uma tabela nutricional.
-Se a porção não for especificada, faça uma estimativa razoável baseada no contexto.
-
-Exemplos de porções: "100g", "1 colher de sopa", "1 xícara", "1 filé médio", "1 prato", "2 fatias", etc.`,
-      },
-      {
-        role: "user",
-        content: `Extraia os itens alimentares e porções desta refeição:\n\n"${mealDescription}"`,
-      },
-    ],
-    temperature: 0,
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "meal_items",
-        strict: true,
-        schema: {
-          type: "object",
-          properties: {
-            items: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  foodName: {
-                    type: "string",
-                    description: "Nome do alimento em português",
-                  },
-                  serving: {
-                    type: "string",
-                    description: "Tamanho da porção (ex: '100g', '1 colher de sopa')",
-                  },
-                },
-                required: ["foodName", "serving"],
-                additionalProperties: false,
-              },
-            },
-          },
-          required: ["items"],
-          additionalProperties: false,
-        },
-      },
-    },
-  });
-
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    return [];
-  }
-
-  try {
-    const parsed: MealParseResponse = JSON.parse(content);
-    return parsed.items;
-  } catch {
-    return [];
-  }
+function convertToOpenAIMessages(messages: ChatMessage[]): ChatCompletionMessageParam[] {
+  return messages
+    .filter((msg) => msg.content) // Only include messages with content
+    .map((msg): ChatCompletionMessageParam => ({
+      role: msg.direction === "inbound" ? "user" : "assistant",
+      content: msg.content!,
+    }));
 }
 
 /**
@@ -239,7 +229,83 @@ async function saveInboundMessage(message: WhatsAppMessage): Promise<void> {
 }
 
 /**
- * Processes incoming WhatsApp messages
+ * Executes the analyze_meal tool
+ */
+async function executeAnalyzeMealTool(mealDescription: string): Promise<string> {
+  console.log(`🔎 Analyzing meal: "${mealDescription}"`);
+  
+  // Parse the meal description into food items using OpenAI
+  const parseResponse = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: `Extraia os itens alimentares e suas porções da descrição fornecida.
+Retorne em português brasileiro, com nomes simples de alimentos.
+Se a porção não for especificada, estime baseado no contexto.`,
+      },
+      {
+        role: "user",
+        content: mealDescription,
+      },
+    ],
+    temperature: 0,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "meal_items",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  foodName: { type: "string" },
+                  serving: { type: "string" },
+                },
+                required: ["foodName", "serving"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["items"],
+          additionalProperties: false,
+        },
+      },
+    },
+  });
+
+  const parseContent = parseResponse.choices[0]?.message?.content;
+  if (!parseContent) {
+    return "Não consegui identificar os alimentos na descrição.";
+  }
+
+  let foodItems: FoodItem[];
+  try {
+    const parsed = JSON.parse(parseContent);
+    foodItems = parsed.items;
+  } catch {
+    return "Erro ao processar os alimentos.";
+  }
+
+  if (foodItems.length === 0) {
+    return "Não encontrei nenhum alimento na descrição.";
+  }
+
+  console.log(`📋 Parsed ${foodItems.length} food items:`, foodItems);
+
+  // Get nutritional values
+  const nutritionalResult = await getAggregateNutritionalValues({ items: foodItems });
+  
+  // Return as a formatted string for the assistant to use
+  return formatNutritionalResponse(nutritionalResult);
+}
+
+/**
+ * Processes incoming WhatsApp messages using conversational AI
  */
 async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
   const senderPhone = message.from;
@@ -263,34 +329,74 @@ async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
   console.log(`💬 Text message from ${senderPhone}: "${messageText}"`);
 
   try {
-    // Send acknowledgment
-    await sendWhatsAppMessage(senderPhone, "🔍 Analisando sua refeição...");
+    // Fetch conversation history
+    const history = await getConversationHistory(senderPhone, 100);
+    const openaiMessages = convertToOpenAIMessages(history);
     
-    // Step 1: Parse the meal description into food items
-    console.log("📝 Parsing meal description...");
-    const foodItems = await parseMealDescription(messageText);
-    
-    if (foodItems.length === 0) {
-      await sendWhatsAppMessage(senderPhone, "❌ Não consegui identificar nenhum alimento na sua mensagem. Tente descrever sua refeição novamente.");
-      return;
+    console.log(`📚 Loaded ${openaiMessages.length} messages from history`);
+
+    // Build the messages array for OpenAI
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...openaiMessages,
+      { role: "user", content: messageText },
+    ];
+
+    // Call OpenAI with tools
+    let response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages,
+      tools: [ANALYZE_MEAL_TOOL],
+      tool_choice: "auto",
+      temperature: 0.7,
+    });
+
+    let assistantMessage = response.choices[0]?.message;
+
+    // Handle tool calls
+    while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
+      console.log(`🔧 Tool calls requested: ${assistantMessage.tool_calls.length}`);
+      
+      // Add assistant's message with tool calls to the conversation
+      messages.push(assistantMessage);
+
+      // Execute each tool call
+      for (const toolCall of assistantMessage.tool_calls) {
+        if (toolCall.function.name === "analyze_meal") {
+          const args = JSON.parse(toolCall.function.arguments);
+          const toolResult = await executeAnalyzeMealTool(args.meal_description);
+          
+          // Add tool result to messages
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: toolResult,
+          });
+        }
+      }
+
+      // Get the next response from OpenAI
+      response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages,
+        tools: [ANALYZE_MEAL_TOOL],
+        tool_choice: "auto",
+        temperature: 0.7,
+      });
+
+      assistantMessage = response.choices[0]?.message;
     }
+
+    // Send the final response to WhatsApp
+    const finalResponse = assistantMessage?.content || "Desculpe, não consegui processar sua mensagem.";
+    await sendWhatsAppMessage(senderPhone, finalResponse);
     
-    console.log(`📋 Parsed ${foodItems.length} food items:`, foodItems);
-    
-    // Step 2: Get aggregate nutritional values
-    console.log("🔎 Fetching nutritional values...");
-    const nutritionalResult = await getAggregateNutritionalValues({ items: foodItems });
-    
-    // Step 3: Format and send the response
-    const responseMessage = formatNutritionalResponse(nutritionalResult);
-    await sendWhatsAppMessage(senderPhone, responseMessage);
-    
-    console.log(`✅ Sent nutritional analysis to ${senderPhone}`);
+    console.log(`✅ Sent response to ${senderPhone}`);
   } catch (error) {
-    console.error(`❌ Error processing meal for ${senderPhone}:`, error);
+    console.error(`❌ Error processing message for ${senderPhone}:`, error);
     await sendWhatsAppMessage(
       senderPhone,
-      "❌ Ocorreu um erro ao analisar sua refeição. Por favor, tente novamente."
+      "❌ Ocorreu um erro ao processar sua mensagem. Por favor, tente novamente."
     ).catch(() => {});
   }
 }
