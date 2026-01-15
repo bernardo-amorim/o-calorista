@@ -16,13 +16,19 @@ data "aws_secretsmanager_secret" "app_secrets" {
 }
 
 locals {
-  # Combine directly-specified secrets with looked-up secrets
+  # Combine directly-specified secrets, looked-up secrets, and ARN-specified secrets
   all_secrets = concat(
     var.secrets,
     [
       for s in var.secret_names : {
         name       = s.env_var_name
         value_from = data.aws_secretsmanager_secret.app_secrets[s.env_var_name].arn
+      }
+    ],
+    [
+      for s in var.secret_arns : {
+        name       = s.env_var_name
+        value_from = s.secret_arn
       }
     ]
   )

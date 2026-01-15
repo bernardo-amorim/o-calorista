@@ -85,6 +85,15 @@ variable "secret_names" {
   default = []
 }
 
+variable "secret_arns" {
+  description = "List of secrets to inject by ARN (for secrets created by other modules in the same apply)"
+  type = list(object({
+    env_var_name = string  # Name of the environment variable in the container
+    secret_arn   = string  # Full ARN of the secret
+  }))
+  default = []
+}
+
 variable "enable_github_oidc" {
   description = "Enable GitHub Actions OIDC integration for CI/CD"
   type        = bool

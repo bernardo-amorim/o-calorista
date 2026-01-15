@@ -21,6 +21,7 @@ desired_count  = 1
 
 # Secrets - automatically looked up from Secrets Manager by name
 # These map environment variable names to secret names created by `bun run sync-secrets`
+# Note: DATABASE_URL is passed via secret_arns from the RDS module (not here)
 secret_names = [
   { env_var_name = "OPENAI_API_KEY", secret_name = "openai-api-key" },
   { env_var_name = "WHATSAPP_ACCESS_TOKEN", secret_name = "whatsapp-access-token" },
@@ -35,5 +36,19 @@ secrets = []
 # GitHub Actions CI/CD
 # Set to true and provide your repo to enable automatic deployments
 enable_github_oidc          = true
-create_github_oidc_provider = false   # Set to false if OIDC provider already exists in your AWS account
+create_github_oidc_provider = true    # Creates the GitHub OIDC provider for keyless auth
 github_repository           = "bernardo-amorim/o-calorista"
+
+# Database configuration
+db_postgres_version      = "15"
+db_instance_class        = "db.t4g.micro"  # ~$12/month, ARM-based
+db_allocated_storage     = 20              # Minimum for gp3
+db_max_allocated_storage = 100             # Auto-scale up to 100GB
+db_name                  = "ocalorista"
+db_username              = "ocalorista"
+# db_password            = "SET_VIA_TF_VAR_db_password"  # Use: export TF_VAR_db_password="your-secure-password"
+db_multi_az              = false           # Set to true for high availability
+db_backup_retention_period = 7
+db_deletion_protection   = false           # Set to true after initial setup
+db_skip_final_snapshot   = false
+db_publicly_accessible   = true            # DEV ONLY! Set to false for production

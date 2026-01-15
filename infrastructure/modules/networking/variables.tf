@@ -31,3 +31,9 @@ variable "container_port" {
   type        = number
   default     = 3000
 }
+
+variable "db_publicly_accessible" {
+  description = "Allow public access to the database (for development only!)"
+  type        = bool
+  default     = false
+}

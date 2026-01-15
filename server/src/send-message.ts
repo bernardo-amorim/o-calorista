@@ -9,9 +9,12 @@
  * - WHATSAPP_ACCESS_TOKEN: Your access token from Meta Developer Portal
  */
 
+import { db, chatMessage } from "./db";
+
 const WHATSAPP_API_VERSION = "v22.0";
-const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+// Environment variables (typed in env.d.ts)
+const WHATSAPP_PHONE_NUMBER_ID = Bun.env.WHATSAPP_PHONE_NUMBER_ID;
+const WHATSAPP_ACCESS_TOKEN = Bun.env.WHATSAPP_ACCESS_TOKEN;
 
 interface WhatsAppMessageResponse {
   messaging_product: string;
@@ -29,7 +32,7 @@ interface WhatsAppErrorResponse {
 }
 
 /**
- * Sends a text message via WhatsApp Cloud API
+ * Sends a text message via WhatsApp Cloud API and saves it to the database
  */
 async function sendWhatsAppMessage(
   to: string,
@@ -71,7 +74,23 @@ async function sendWhatsAppMessage(
     );
   }
 
-  return data as WhatsAppMessageResponse;
+  const result = data as WhatsAppMessageResponse;
+
+  // Save outbound message to database
+  try {
+    await db.insert(chatMessage).values({
+      whatsappMessageId: result.messages[0]?.id,
+      phoneNumber: to,
+      direction: "outbound",
+      messageType: "text",
+      content: message,
+    });
+  } catch (error) {
+    console.error("⚠️ Failed to save outbound message to database:", error);
+    // Don't throw - message was sent successfully, just logging failed
+  }
+
+  return result;
 }
 
 // Main execution

@@ -470,7 +470,7 @@ export async function getFoodNutritionalValues(
   const { foodName, serving, openaiApiKey } = options;
 
   const openai = new OpenAI({
-    apiKey: openaiApiKey || process.env.OPENAI_API_KEY,
+    apiKey: openaiApiKey || Bun.env.OPENAI_API_KEY,
   });
 
   // Step 1: Search for food items

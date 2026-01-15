@@ -16,12 +16,13 @@ import crypto from "crypto";
 import OpenAI from "openai";
 import { sendWhatsAppMessage } from "./send-message";
 import { getAggregateNutritionalValues } from "./fatsecret";
+import { db, chatMessage } from "./db";
 import type { FoodItem, AggregateNutritionalResponse } from "./types";
 
-// Environment variables (Bun automatically loads .env files)
-const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
-const APP_SECRET = process.env.META_APP_SECRET;
-const PORT = process.env.PORT || 3000;
+// Environment variables (typed in env.d.ts, Bun automatically loads .env files)
+const VERIFY_TOKEN = Bun.env.WHATSAPP_VERIFY_TOKEN;
+const APP_SECRET = Bun.env.META_APP_SECRET;
+const PORT = Bun.env.PORT || 3000;
 
 // Allowed phone numbers that the bot will respond to
 const ALLOWED_PHONE_NUMBERS = ["5519992932912", "5519995666244"];
@@ -219,10 +220,32 @@ function formatNutritionalResponse(result: AggregateNutritionalResponse): string
 }
 
 /**
+ * Saves an inbound message to the database
+ */
+async function saveInboundMessage(message: WhatsAppMessage): Promise<void> {
+  try {
+    await db.insert(chatMessage).values({
+      whatsappMessageId: message.id,
+      phoneNumber: message.from,
+      direction: "inbound",
+      messageType: message.type as "text" | "image" | "audio" | "video" | "document" | "sticker" | "location" | "contacts" | "interactive" | "button" | "reaction" | "unknown",
+      content: message.text?.body || null,
+      metadata: message as unknown as Record<string, unknown>,
+    });
+  } catch (error) {
+    console.error("⚠️ Failed to save inbound message to database:", error);
+    // Don't throw - continue processing even if save fails
+  }
+}
+
+/**
  * Processes incoming WhatsApp messages
  */
 async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
   const senderPhone = message.from;
+
+  // Save all inbound messages to database (regardless of allowed status)
+  await saveInboundMessage(message);
   
   // Only respond to allowed phone numbers
   if (!ALLOWED_PHONE_NUMBERS.includes(senderPhone)) {

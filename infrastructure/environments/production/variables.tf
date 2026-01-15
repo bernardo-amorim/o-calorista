@@ -100,3 +100,76 @@ variable "github_repository" {
   type        = string
   default     = ""
 }
+
+# Database configuration
+variable "db_postgres_version" {
+  description = "PostgreSQL engine version"
+  type        = string
+  default     = "15"
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t4g.micro"  # Cheapest ARM-based instance
+}
+
+variable "db_allocated_storage" {
+  description = "Initial storage allocation in GB"
+  type        = number
+  default     = 20
+}
+
+variable "db_max_allocated_storage" {
+  description = "Maximum storage for autoscaling in GB"
+  type        = number
+  default     = 100
+}
+
+variable "db_name" {
+  description = "Name of the database"
+  type        = string
+  default     = "ocalorista"
+}
+
+variable "db_username" {
+  description = "Master username for the database"
+  type        = string
+  default     = "ocalorista"
+}
+
+variable "db_password" {
+  description = "Master password for the database"
+  type        = string
+  sensitive   = true
+}
+
+variable "db_multi_az" {
+  description = "Enable Multi-AZ deployment"
+  type        = bool
+  default     = false
+}
+
+variable "db_backup_retention_period" {
+  description = "Number of days to retain backups"
+  type        = number
+  default     = 7
+}
+
+variable "db_deletion_protection" {
+  description = "Enable deletion protection"
+  type        = bool
+  default     = false
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Skip final snapshot when destroying"
+  type        = bool
+  default     = false
+}
+
+variable "db_publicly_accessible" {
+  description = "Make the database publicly accessible (for development only!)"
+  type        = bool
+  default     = false
+}

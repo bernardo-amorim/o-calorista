@@ -37,3 +37,24 @@ output "github_actions_role_arn" {
   description = "ARN of the IAM role for GitHub Actions (add to GitHub secrets as AWS_ROLE_ARN)"
   value       = module.ecs_service.github_actions_role_arn
 }
+
+# Database outputs
+output "database_endpoint" {
+  description = "Database endpoint (hostname:port)"
+  value       = module.rds.endpoint
+}
+
+output "database_hostname" {
+  description = "Database hostname"
+  value       = module.rds.hostname
+}
+
+output "database_name" {
+  description = "Name of the database"
+  value       = module.rds.database_name
+}
+
+output "database_url_secret_name" {
+  description = "Name of the DATABASE_URL secret in Secrets Manager"
+  value       = module.rds.database_url_secret_name
+}
