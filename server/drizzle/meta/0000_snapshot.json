@@ -1,11 +1,11 @@
 {
-  "id": "ee26a486-4ba3-4e1a-840a-6d7259c86a47",
+  "id": "8b244730-2dcc-4c4e-ae19-f4264159cfbd",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.chat_messages": {
-      "name": "chat_messages",
+    "public.chat_message": {
+      "name": "chat_message",
       "schema": "",
       "columns": {
         "id": {
@@ -69,8 +69,8 @@
         }
       },
       "indexes": {
-        "chat_messages_phone_number_idx": {
-          "name": "chat_messages_phone_number_idx",
+        "chat_message_phone_number_idx": {
+          "name": "chat_message_phone_number_idx",
           "columns": [
             {
               "expression": "phone_number",
@@ -84,8 +84,8 @@
           "method": "btree",
           "with": {}
         },
-        "chat_messages_whatsapp_message_id_idx": {
-          "name": "chat_messages_whatsapp_message_id_idx",
+        "chat_message_whatsapp_message_id_idx": {
+          "name": "chat_message_whatsapp_message_id_idx",
           "columns": [
             {
               "expression": "whatsapp_message_id",
@@ -99,8 +99,8 @@
           "method": "btree",
           "with": {}
         },
-        "chat_messages_created_at_idx": {
-          "name": "chat_messages_created_at_idx",
+        "chat_message_created_at_idx": {
+          "name": "chat_message_created_at_idx",
           "columns": [
             {
               "expression": "created_at",

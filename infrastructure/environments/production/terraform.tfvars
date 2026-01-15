@@ -21,8 +21,8 @@ desired_count  = 1
 
 # Secrets - automatically looked up from Secrets Manager by name
 # These map environment variable names to secret names created by `bun run sync-secrets`
-# Note: DATABASE_URL is passed via secret_arns from the RDS module (not here)
 secret_names = [
+  { env_var_name = "DATABASE_URL", secret_name = "database-url" },
   { env_var_name = "OPENAI_API_KEY", secret_name = "openai-api-key" },
   { env_var_name = "WHATSAPP_ACCESS_TOKEN", secret_name = "whatsapp-access-token" },
   { env_var_name = "WHATSAPP_PHONE_NUMBER_ID", secret_name = "whatsapp-phone-number-id" },

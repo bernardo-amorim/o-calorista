@@ -65,17 +65,10 @@ module "ecs_service" {
   secrets                     = var.secrets
   secret_names                = var.secret_names
 
-  # Secrets from other modules (passed by ARN to avoid lookup timing issues)
-  secret_arns = [
-    { env_var_name = "DATABASE_URL", secret_arn = module.rds.database_url_secret_arn }
-  ]
-
   # GitHub Actions CI/CD
   enable_github_oidc          = var.enable_github_oidc
   create_github_oidc_provider = var.create_github_oidc_provider
   github_repository           = var.github_repository
-
-  depends_on = [module.rds]
 }
 
 # RDS PostgreSQL Module

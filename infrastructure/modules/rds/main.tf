@@ -93,20 +93,3 @@ resource "aws_db_instance" "postgres" {
     prevent_destroy = false  # Set to true in production after initial setup
   }
 }
-
-# Store the database URL in Secrets Manager
-resource "aws_secretsmanager_secret" "database_url" {
-  name        = "${var.project_name}/${var.environment}/database-url"
-  description = "PostgreSQL connection URL for ${var.project_name} ${var.environment}"
-
-  tags = {
-    Name        = "${var.project_name}-${var.environment}-database-url"
-    Environment = var.environment
-    Project     = var.project_name
-  }
-}
-
-resource "aws_secretsmanager_secret_version" "database_url" {
-  secret_id = aws_secretsmanager_secret.database_url.id
-  secret_string = "postgresql://${var.database_username}:${var.database_password}@${aws_db_instance.postgres.endpoint}/${var.database_name}"
-}

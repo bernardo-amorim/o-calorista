@@ -26,6 +26,7 @@ const PROJECT_NAME = "ocalorista";
 
 // Keys that should be synced to Secrets Manager
 const SECRET_KEYS = [
+  "DATABASE_URL",
   "OPENAI_API_KEY",
   "WHATSAPP_ACCESS_TOKEN",
   "WHATSAPP_PHONE_NUMBER_ID",

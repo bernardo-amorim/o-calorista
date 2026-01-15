@@ -1,6 +1,6 @@
 CREATE TYPE "public"."message_direction" AS ENUM('inbound', 'outbound');--> statement-breakpoint
 CREATE TYPE "public"."message_type" AS ENUM('text', 'image', 'audio', 'video', 'document', 'sticker', 'location', 'contacts', 'interactive', 'button', 'reaction', 'unknown');--> statement-breakpoint
-CREATE TABLE "chat_messages" (
+CREATE TABLE "chat_message" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"whatsapp_message_id" varchar(255),
 	"phone_number" varchar(20) NOT NULL,
@@ -12,6 +12,6 @@ CREATE TABLE "chat_messages" (
 	"processed_at" timestamp with time zone
 );
 --> statement-breakpoint
-CREATE INDEX "chat_messages_phone_number_idx" ON "chat_messages" USING btree ("phone_number");--> statement-breakpoint
-CREATE INDEX "chat_messages_whatsapp_message_id_idx" ON "chat_messages" USING btree ("whatsapp_message_id");--> statement-breakpoint
-CREATE INDEX "chat_messages_created_at_idx" ON "chat_messages" USING btree ("created_at");
+CREATE INDEX "chat_message_phone_number_idx" ON "chat_message" USING btree ("phone_number");--> statement-breakpoint
+CREATE INDEX "chat_message_whatsapp_message_id_idx" ON "chat_message" USING btree ("whatsapp_message_id");--> statement-breakpoint
+CREATE INDEX "chat_message_created_at_idx" ON "chat_message" USING btree ("created_at");

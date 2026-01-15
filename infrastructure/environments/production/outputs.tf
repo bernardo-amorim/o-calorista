@@ -53,8 +53,3 @@ output "database_name" {
   description = "Name of the database"
   value       = module.rds.database_name
 }
-
-output "database_url_secret_name" {
-  description = "Name of the DATABASE_URL secret in Secrets Manager"
-  value       = module.rds.database_url_secret_name
-}

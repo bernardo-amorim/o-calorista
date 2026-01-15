@@ -13,7 +13,7 @@ export type {
 
 // Example usage when running directly
 // Usage: bun run lookup <foodName> [serving]
-// Example: bun run lookup "arroz branco" "3 colheres de sopa"
+// Example: bun run lookup "arroz branco" "4 colheres de sopa"
 async function main() {
   const foodName = process.argv[2] || "carne moída";
   const serving = process.argv[3];
