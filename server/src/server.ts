@@ -234,7 +234,7 @@ async function saveInboundMessage(message: WhatsAppMessage): Promise<void> {
     });
   } catch (error) {
     console.error("⚠️ Failed to save inbound message to database:", error);
-    // Don't throw - continue processing even if save fails
+    // Don't throw, dude - continue processing even if save fails
   }
 }
 
