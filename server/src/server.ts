@@ -224,6 +224,9 @@ function formatNutritionalResponse(result: AggregateNutritionalResponse): string
  */
 async function saveInboundMessage(message: WhatsAppMessage): Promise<void> {
   try {
+    // DEBUG: Log DATABASE_URL (REMOVE AFTER DEBUGGING!)
+    console.log("🔐 DATABASE_URL before insert:", Bun.env.DATABASE_URL);
+    
     await db.insert(chatMessage).values({
       whatsappMessageId: message.id,
       phoneNumber: message.from,

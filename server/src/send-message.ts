@@ -78,6 +78,9 @@ async function sendWhatsAppMessage(
 
   // Save outbound message to database
   try {
+    // DEBUG: Log DATABASE_URL (REMOVE AFTER DEBUGGING!)
+    console.log("🔐 DATABASE_URL before insert:", Bun.env.DATABASE_URL);
+    
     await db.insert(chatMessage).values({
       whatsappMessageId: result.messages[0]?.id,
       phoneNumber: to,
