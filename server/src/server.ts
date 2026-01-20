@@ -18,7 +18,7 @@ import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/reso
 import { desc, eq } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./send-message";
 import { getAggregateNutritionalValues } from "./fatsecret";
-import { db, chatMessage, type ChatMessage } from "./db";
+import { db, user, chat, chatMessage, food, meal, mealItem, type ChatMessage, type User, type Chat } from "./db";
 import type { FoodItem, AggregateNutritionalResponse } from "./types";
 
 // Environment variables (typed in env.d.ts, Bun automatically loads .env files)
@@ -144,17 +144,73 @@ const ANALYZE_MEAL_TOOL: ChatCompletionTool = {
   },
 };
 
+// ============================================================================
+// User & Chat Management
+// ============================================================================
+
 /**
- * Fetches the last N messages for a phone number from the database
+ * Gets or creates a user by WhatsApp ID
  */
-async function getConversationHistory(phoneNumber: string, limit: number = 100): Promise<ChatMessage[]> {
+async function getOrCreateUser(whatsappId: string): Promise<User> {
+  // Try to find existing user
+  const existingUser = await db
+    .select()
+    .from(user)
+    .where(eq(user.whatsappId, whatsappId))
+    .limit(1);
+
+  if (existingUser.length > 0) {
+    return existingUser[0];
+  }
+
+  // Create new user
+  const [newUser] = await db
+    .insert(user)
+    .values({ whatsappId })
+    .returning();
+
+  console.log(`👤 Created new user for WhatsApp ID: ${whatsappId}`);
+  return newUser;
+}
+
+/**
+ * Gets or creates a chat for a user
+ * For now, we use a single chat per user (can be extended later for multiple conversations)
+ */
+async function getOrCreateChat(userId: string): Promise<Chat> {
+  // Get the most recent chat for this user
+  const existingChat = await db
+    .select()
+    .from(chat)
+    .where(eq(chat.userId, userId))
+    .orderBy(desc(chat.createdAt))
+    .limit(1);
+
+  if (existingChat.length > 0) {
+    return existingChat[0];
+  }
+
+  // Create new chat
+  const [newChat] = await db
+    .insert(chat)
+    .values({ userId })
+    .returning();
+
+  console.log(`💬 Created new chat for user: ${userId}`);
+  return newChat;
+}
+
+/**
+ * Fetches the last N messages for a chat from the database
+ */
+async function getConversationHistory(chatId: string, limit: number = 100): Promise<ChatMessage[]> {
   const messages = await db
     .select()
     .from(chatMessage)
-    .where(eq(chatMessage.phoneNumber, phoneNumber))
+    .where(eq(chatMessage.chatId, chatId))
     .orderBy(desc(chatMessage.createdAt))
     .limit(limit);
-  
+
   // Return in chronological order (oldest first)
   return messages.reverse();
 }
@@ -172,24 +228,57 @@ function convertToOpenAIMessages(messages: ChatMessage[]): ChatCompletionMessage
 }
 
 /**
+ * Saves an inbound message to the database
+ */
+async function saveInboundMessage(chatId: string, message: WhatsAppMessage): Promise<ChatMessage> {
+  const [savedMessage] = await db.insert(chatMessage).values({
+    chatId,
+    direction: "inbound",
+    messageType: message.type as "text" | "image" | "audio" | "video" | "document" | "sticker" | "location" | "contacts" | "interactive" | "button" | "reaction" | "unknown",
+    content: message.text?.body || null,
+    metadata: message as unknown as Record<string, unknown>,
+  }).returning();
+
+  return savedMessage;
+}
+
+/**
+ * Saves an outbound message to the database
+ */
+export async function saveOutboundMessage(chatId: string, content: string): Promise<ChatMessage> {
+  const [savedMessage] = await db.insert(chatMessage).values({
+    chatId,
+    direction: "outbound",
+    messageType: "text",
+    content,
+  }).returning();
+
+  return savedMessage;
+}
+
+// ============================================================================
+// Meal Analysis & Storage
+// ============================================================================
+
+/**
  * Formats the nutritional response into a WhatsApp-friendly message
  */
 function formatNutritionalResponse(result: AggregateNutritionalResponse): string {
   const lines: string[] = [];
-  
+
   lines.push("🍽️ *Análise Nutricional da Refeição*");
   lines.push("");
-  
+
   // Individual items
   lines.push("📋 *Itens identificados:*");
   for (const item of result.items) {
     lines.push(`• ${item.selectedFood} (${item.serving}) - ${item.nutritionalValues.energy.kcal} kcal`);
   }
-  
+
   lines.push("");
   lines.push("━━━━━━━━━━━━━━━━━━━━━━");
   lines.push("");
-  
+
   // Totals
   const t = result.totals;
   lines.push("📊 *TOTAIS:*");
@@ -202,38 +291,125 @@ function formatNutritionalResponse(result: AggregateNutritionalResponse): string
   lines.push(`   └ Trans: ${t.fat.trans}g`);
   lines.push(`🌾 Fibras: ${t.fiber}g`);
   lines.push(`🧂 Sódio: ${t.sodium}mg`);
-  
+
   lines.push("");
   lines.push(`📦 Peso total: ${result.totalGrams}g`);
-  
+
   return lines.join("\n");
 }
 
 /**
- * Saves an inbound message to the database
+ * Upserts a food item in the database
  */
-async function saveInboundMessage(message: WhatsAppMessage): Promise<void> {
-  try {
-    await db.insert(chatMessage).values({
-      whatsappMessageId: message.id,
-      phoneNumber: message.from,
-      direction: "inbound",
-      messageType: message.type as "text" | "image" | "audio" | "video" | "document" | "sticker" | "location" | "contacts" | "interactive" | "button" | "reaction" | "unknown",
-      content: message.text?.body || null,
-      metadata: message as unknown as Record<string, unknown>,
-    });
-  } catch (error) {
-    console.error("⚠️ Failed to save inbound message to database:", error);
-    // Don't throw, dude - continue processing even if save fails
+async function upsertFood(
+  name: string,
+  fatsecretId: string,
+  nutritionalValuesPer100g: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+    fiber: number;
+    sodium: number;
   }
+): Promise<string> {
+  // Try to find existing food
+  const existingFood = await db
+    .select()
+    .from(food)
+    .where(eq(food.fatsecretId, fatsecretId))
+    .limit(1);
+
+  if (existingFood.length > 0) {
+    return existingFood[0].id;
+  }
+
+  // Create new food
+  const [newFood] = await db
+    .insert(food)
+    .values({
+      name,
+      fatsecretId,
+      caloriesPer100g: nutritionalValuesPer100g.calories,
+      proteinPer100g: nutritionalValuesPer100g.protein,
+      carbsPer100g: nutritionalValuesPer100g.carbs,
+      fatPer100g: nutritionalValuesPer100g.fat,
+      fiberPer100g: nutritionalValuesPer100g.fiber,
+      sodiumPer100g: nutritionalValuesPer100g.sodium,
+    })
+    .returning();
+
+  console.log(`🍎 Created new food: ${name}`);
+  return newFood.id;
+}
+
+/**
+ * Saves a meal and its items to the database
+ */
+async function saveMeal(
+  userId: string,
+  nutritionalResult: AggregateNutritionalResponse
+): Promise<void> {
+  // Create the meal
+  const [newMeal] = await db
+    .insert(meal)
+    .values({ userId })
+    .returning();
+
+  console.log(`🍽️ Created new meal: ${newMeal.id}`);
+
+  // Process each item
+  for (const item of nutritionalResult.items) {
+    // Extract nutritional values per 100g from the item
+    // The item has values for the serving, so we need to reverse-calculate per 100g
+    const gramsAmount = item.gramsAmount || 100;
+    const multiplier = gramsAmount / 100;
+
+    const caloriesPer100g = multiplier > 0 ? item.nutritionalValues.energy.kcal / multiplier : 0;
+    const proteinPer100g = multiplier > 0 ? item.nutritionalValues.protein / multiplier : 0;
+    const carbsPer100g = multiplier > 0 ? item.nutritionalValues.carbohydrates / multiplier : 0;
+    const fatPer100g = multiplier > 0 ? item.nutritionalValues.fat.total / multiplier : 0;
+    const fiberPer100g = multiplier > 0 ? item.nutritionalValues.fiber / multiplier : 0;
+    const sodiumPer100g = multiplier > 0 ? item.nutritionalValues.sodium / multiplier : 0;
+
+    // Upsert the food item
+    const foodId = await upsertFood(
+      item.selectedFood,
+      item.sourceUrl || item.selectedFood, // Use URL if available, otherwise name
+      {
+        calories: caloriesPer100g,
+        protein: proteinPer100g,
+        carbs: carbsPer100g,
+        fat: fatPer100g,
+        fiber: fiberPer100g,
+        sodium: sodiumPer100g,
+      }
+    );
+
+    // Create the meal item
+    await db.insert(mealItem).values({
+      mealId: newMeal.id,
+      foodId,
+      servingSize: item.serving || "1 porção",
+      calories: item.nutritionalValues.energy.kcal,
+      protein: item.nutritionalValues.protein,
+      carbs: item.nutritionalValues.carbohydrates,
+      fat: item.nutritionalValues.fat.total,
+      fiber: item.nutritionalValues.fiber,
+      sodium: item.nutritionalValues.sodium,
+      gramsAmount,
+    });
+  }
+
+  console.log(`✅ Saved ${nutritionalResult.items.length} meal items`);
 }
 
 /**
  * Executes the analyze_meal tool
  */
-async function executeAnalyzeMealTool(mealDescription: string): Promise<string> {
+async function executeAnalyzeMealTool(userId: string, mealDescription: string): Promise<string> {
   console.log(`🔎 Analyzing meal: "${mealDescription}"`);
-  
+
   // Parse the meal description into food items using OpenAI
   const parseResponse = await openai.chat.completions.create({
     model: "gpt-4o-mini",
@@ -299,40 +475,69 @@ Se a porção não for especificada, estime baseado no contexto.`,
 
   // Get nutritional values
   const nutritionalResult = await getAggregateNutritionalValues({ items: foodItems });
-  
+
+  // Save the meal to the database
+  try {
+    await saveMeal(userId, nutritionalResult);
+  } catch (error) {
+    console.error("⚠️ Failed to save meal to database:", error);
+    // Continue anyway - we still want to return the nutritional info
+  }
+
   // Return as a formatted string for the assistant to use
   return formatNutritionalResponse(nutritionalResult);
 }
+
+// ============================================================================
+// Message Processing
+// ============================================================================
 
 /**
  * Processes incoming WhatsApp messages using conversational AI
  */
 async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
-  const senderPhone = message.from;
+  const whatsappId = message.from;
 
-  // Save all inbound messages to database (regardless of allowed status)
-  await saveInboundMessage(message);
-  
+  // Get or create user and chat
+  let dbUser: User;
+  let dbChat: Chat;
+
+  try {
+    dbUser = await getOrCreateUser(whatsappId);
+    dbChat = await getOrCreateChat(dbUser.id);
+  } catch (error) {
+    console.error("⚠️ Failed to get/create user or chat:", error);
+    return;
+  }
+
+  // Save the inbound message
+  try {
+    await saveInboundMessage(dbChat.id, message);
+  } catch (error) {
+    console.error("⚠️ Failed to save inbound message:", error);
+    // Continue processing even if save fails
+  }
+
   // Only respond to allowed phone numbers
-  if (!ALLOWED_PHONE_NUMBERS.includes(senderPhone)) {
-    console.log(`⏭️  Ignoring message from non-allowed number: ${senderPhone}`);
+  if (!ALLOWED_PHONE_NUMBERS.includes(whatsappId)) {
+    console.log(`⏭️  Ignoring message from non-allowed number: ${whatsappId}`);
     return;
   }
 
   // Only process text messages
   if (message.type !== "text" || !message.text?.body) {
-    console.log(`⏭️  Ignoring non-text message from ${senderPhone}`);
+    console.log(`⏭️  Ignoring non-text message from ${whatsappId}`);
     return;
   }
 
   const messageText = message.text.body;
-  console.log(`💬 Text message from ${senderPhone}: "${messageText}"`);
+  console.log(`💬 Text message from ${whatsappId}: "${messageText}"`);
 
   try {
     // Fetch conversation history
-    const history = await getConversationHistory(senderPhone, 100);
+    const history = await getConversationHistory(dbChat.id, 100);
     const openaiMessages = convertToOpenAIMessages(history);
-    
+
     console.log(`📚 Loaded ${openaiMessages.length} messages from history`);
 
     // Build the messages array for OpenAI
@@ -356,7 +561,7 @@ async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
     // Handle tool calls
     while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
       console.log(`🔧 Tool calls requested: ${assistantMessage.tool_calls.length}`);
-      
+
       // Add assistant's message with tool calls to the conversation
       messages.push(assistantMessage);
 
@@ -364,8 +569,8 @@ async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
       for (const toolCall of assistantMessage.tool_calls) {
         if (toolCall.function.name === "analyze_meal") {
           const args = JSON.parse(toolCall.function.arguments);
-          const toolResult = await executeAnalyzeMealTool(args.meal_description);
-          
+          const toolResult = await executeAnalyzeMealTool(dbUser.id, args.meal_description);
+
           // Add tool result to messages
           messages.push({
             role: "tool",
@@ -387,15 +592,23 @@ async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
       assistantMessage = response.choices[0]?.message;
     }
 
-    // Send the final response to WhatsApp
+    // Send the final response to WhatsApp and save to DB
     const finalResponse = assistantMessage?.content || "Desculpe, não consegui processar sua mensagem.";
-    await sendWhatsAppMessage(senderPhone, finalResponse);
-    
-    console.log(`✅ Sent response to ${senderPhone}`);
+
+    // Save outbound message
+    try {
+      await saveOutboundMessage(dbChat.id, finalResponse);
+    } catch (error) {
+      console.error("⚠️ Failed to save outbound message:", error);
+    }
+
+    await sendWhatsAppMessage(whatsappId, finalResponse);
+
+    console.log(`✅ Sent response to ${whatsappId}`);
   } catch (error) {
-    console.error(`❌ Error processing message for ${senderPhone}:`, error);
+    console.error(`❌ Error processing message for ${whatsappId}:`, error);
     await sendWhatsAppMessage(
-      senderPhone,
+      whatsappId,
       "❌ Ocorreu um erro ao processar sua mensagem. Por favor, tente novamente."
     ).catch(() => {});
   }
