@@ -15,7 +15,7 @@
 import crypto from "crypto";
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, and, gte, lte, sql } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./send-message";
 import { getAggregateNutritionalValues } from "./fatsecret";
 import { db, user, chat, chatMessage, food, meal, mealItem, type ChatMessage, type User, type Chat } from "./db";
@@ -111,7 +111,15 @@ const SYSTEM_PROMPT = `Você é O Calorista, um assistente nutricional brasileir
 
 Sua especialidade é ajudar usuários a entender o valor nutricional das refeições que eles consomem.
 
-Quando o usuário descrever uma refeição ou alimentos, use a ferramenta "analyze_meal" para obter as informações nutricionais detalhadas. A ferramenta aceita uma descrição em linguagem natural da refeição.
+Você tem duas ferramentas disponíveis:
+
+1. "analyze_meal" - Use quando o usuário descrever uma refeição ou alimentos para registrar e analisar as informações nutricionais.
+
+2. "lookup_meal_history" - Use quando o usuário quiser consultar refeições passadas, como:
+   - "O que eu comi hoje?"
+   - "Quantas calorias consumi ontem?"
+   - "Quais foram minhas refeições da semana?"
+   - "Qual foi minha refeição mais calórica?"
 
 Seja conversacional, amigável, e use emojis ocasionalmente. Responda sempre em português brasileiro.
 
@@ -121,7 +129,8 @@ Dicas importantes:
 - Sempre pergunte sobre porções se o usuário não especificar
 - Ofereça dicas nutricionais quando relevante
 - Seja encorajador sobre escolhas alimentares saudáveis
-- Não julgue escolhas menos saudáveis, apenas informe`;
+- Não julgue escolhas menos saudáveis, apenas informe
+- Quando mostrar histórico, formate de forma clara e organizada`;
 
 /**
  * Tool definition for meal analysis
@@ -143,6 +152,52 @@ const ANALYZE_MEAL_TOOL: ChatCompletionTool = {
     },
   },
 };
+
+/**
+ * Tool definition for meal history lookup
+ */
+const LOOKUP_MEAL_HISTORY_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "lookup_meal_history",
+    description: "Consulta o histórico de refeições do usuário. Use para responder perguntas sobre refeições passadas, calorias consumidas, rankings, etc.",
+    parameters: {
+      type: "object",
+      properties: {
+        query_type: {
+          type: "string",
+          enum: ["list_meals", "daily_summary", "period_summary", "top_meals"],
+          description: "Tipo de consulta: 'list_meals' para listar refeições, 'daily_summary' para resumo de um dia, 'period_summary' para resumo de um período, 'top_meals' para ranking de refeições",
+        },
+        start_date: {
+          type: "string",
+          description: "Data de início no formato YYYY-MM-DD. Use a data de hoje se o usuário perguntar sobre 'hoje'.",
+        },
+        end_date: {
+          type: "string",
+          description: "Data de fim no formato YYYY-MM-DD. Mesmo que start_date para consultas de um único dia.",
+        },
+        limit: {
+          type: "number",
+          description: "Número máximo de resultados para retornar (para rankings). Padrão: 5",
+        },
+        sort_by: {
+          type: "string",
+          enum: ["calories", "protein", "carbs", "fat", "date"],
+          description: "Campo para ordenar os resultados. Padrão: 'date' para listagens, 'calories' para rankings.",
+        },
+        sort_order: {
+          type: "string",
+          enum: ["asc", "desc"],
+          description: "Ordem de classificação. 'desc' para mais recentes/maiores primeiro.",
+        },
+      },
+      required: ["query_type", "start_date", "end_date"],
+    },
+  },
+};
+
+const TOOLS: ChatCompletionTool[] = [ANALYZE_MEAL_TOOL, LOOKUP_MEAL_HISTORY_TOOL];
 
 // ============================================================================
 // User & Chat Management
@@ -489,6 +544,276 @@ Se a porção não for especificada, estime baseado no contexto.`,
 }
 
 // ============================================================================
+// Meal History Lookup
+// ============================================================================
+
+interface MealHistoryQuery {
+  query_type: "list_meals" | "daily_summary" | "period_summary" | "top_meals";
+  start_date: string;
+  end_date: string;
+  limit?: number;
+  sort_by?: "calories" | "protein" | "carbs" | "fat" | "date";
+  sort_order?: "asc" | "desc";
+}
+
+interface MealWithItems {
+  id: string;
+  createdAt: Date;
+  items: Array<{
+    foodName: string;
+    servingSize: string;
+    calories: number | null;
+    protein: number | null;
+    carbs: number | null;
+    fat: number | null;
+    fiber: number | null;
+    gramsAmount: number | null;
+  }>;
+  totalCalories: number;
+  totalProtein: number;
+  totalCarbs: number;
+  totalFat: number;
+}
+
+/**
+ * Fetches meals with their items for a user within a date range
+ */
+async function fetchMealsWithItems(
+  userId: string,
+  startDate: Date,
+  endDate: Date
+): Promise<MealWithItems[]> {
+  // Fetch meals in the date range
+  const meals = await db
+    .select()
+    .from(meal)
+    .where(
+      and(
+        eq(meal.userId, userId),
+        gte(meal.createdAt, startDate),
+        lte(meal.createdAt, endDate)
+      )
+    )
+    .orderBy(desc(meal.createdAt));
+
+  // Fetch items for each meal
+  const mealsWithItems: MealWithItems[] = [];
+
+  for (const m of meals) {
+    const items = await db
+      .select({
+        foodName: food.name,
+        servingSize: mealItem.servingSize,
+        calories: mealItem.calories,
+        protein: mealItem.protein,
+        carbs: mealItem.carbs,
+        fat: mealItem.fat,
+        fiber: mealItem.fiber,
+        gramsAmount: mealItem.gramsAmount,
+      })
+      .from(mealItem)
+      .innerJoin(food, eq(mealItem.foodId, food.id))
+      .where(eq(mealItem.mealId, m.id));
+
+    const totalCalories = items.reduce((sum, item) => sum + (item.calories || 0), 0);
+    const totalProtein = items.reduce((sum, item) => sum + (item.protein || 0), 0);
+    const totalCarbs = items.reduce((sum, item) => sum + (item.carbs || 0), 0);
+    const totalFat = items.reduce((sum, item) => sum + (item.fat || 0), 0);
+
+    mealsWithItems.push({
+      id: m.id,
+      createdAt: m.createdAt,
+      items,
+      totalCalories,
+      totalProtein,
+      totalCarbs,
+      totalFat,
+    });
+  }
+
+  return mealsWithItems;
+}
+
+/**
+ * Formats a date in Brazilian Portuguese
+ */
+function formatDateBR(date: Date): string {
+  return date.toLocaleDateString("pt-BR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * Formats meal list response
+ */
+function formatMealListResponse(meals: MealWithItems[]): string {
+  if (meals.length === 0) {
+    return "Não encontrei nenhuma refeição registrada nesse período.";
+  }
+
+  const lines: string[] = [];
+  lines.push(`📋 *${meals.length} refeição(ões) encontrada(s):*\n`);
+
+  for (const m of meals) {
+    lines.push(`🕐 *${formatDateBR(m.createdAt)}*`);
+    for (const item of m.items) {
+      lines.push(`   • ${item.foodName} (${item.servingSize}) - ${item.calories?.toFixed(0) || 0} kcal`);
+    }
+    lines.push(`   📊 Total: *${m.totalCalories.toFixed(0)} kcal* | P: ${m.totalProtein.toFixed(0)}g | C: ${m.totalCarbs.toFixed(0)}g | G: ${m.totalFat.toFixed(0)}g`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Formats daily/period summary response
+ */
+function formatSummaryResponse(meals: MealWithItems[], startDate: Date, endDate: Date): string {
+  if (meals.length === 0) {
+    return "Não encontrei nenhuma refeição registrada nesse período.";
+  }
+
+  const totalCalories = meals.reduce((sum, m) => sum + m.totalCalories, 0);
+  const totalProtein = meals.reduce((sum, m) => sum + m.totalProtein, 0);
+  const totalCarbs = meals.reduce((sum, m) => sum + m.totalCarbs, 0);
+  const totalFat = meals.reduce((sum, m) => sum + m.totalFat, 0);
+
+  const isSameDay = startDate.toDateString() === endDate.toDateString();
+  const periodLabel = isSameDay
+    ? `📅 *Resumo de ${startDate.toLocaleDateString("pt-BR")}*`
+    : `📅 *Resumo de ${startDate.toLocaleDateString("pt-BR")} a ${endDate.toLocaleDateString("pt-BR")}*`;
+
+  const lines: string[] = [];
+  lines.push(periodLabel);
+  lines.push("");
+  lines.push(`🍽️ Refeições: *${meals.length}*`);
+  lines.push("");
+  lines.push("📊 *TOTAIS:*");
+  lines.push(`⚡ Energia: *${totalCalories.toFixed(0)} kcal*`);
+  lines.push(`🥩 Proteínas: ${totalProtein.toFixed(0)}g`);
+  lines.push(`🍞 Carboidratos: ${totalCarbs.toFixed(0)}g`);
+  lines.push(`🧈 Gorduras: ${totalFat.toFixed(0)}g`);
+
+  if (meals.length > 1) {
+    lines.push("");
+    lines.push(`📈 Média por refeição: ${(totalCalories / meals.length).toFixed(0)} kcal`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Formats top meals response
+ */
+function formatTopMealsResponse(
+  meals: MealWithItems[],
+  sortBy: string,
+  limit: number,
+  sortOrder: string
+): string {
+  if (meals.length === 0) {
+    return "Não encontrei nenhuma refeição registrada nesse período.";
+  }
+
+  // Sort meals
+  const sortedMeals = [...meals].sort((a, b) => {
+    let aVal: number, bVal: number;
+    switch (sortBy) {
+      case "protein":
+        aVal = a.totalProtein;
+        bVal = b.totalProtein;
+        break;
+      case "carbs":
+        aVal = a.totalCarbs;
+        bVal = b.totalCarbs;
+        break;
+      case "fat":
+        aVal = a.totalFat;
+        bVal = b.totalFat;
+        break;
+      case "date":
+        aVal = a.createdAt.getTime();
+        bVal = b.createdAt.getTime();
+        break;
+      default: // calories
+        aVal = a.totalCalories;
+        bVal = b.totalCalories;
+    }
+    return sortOrder === "asc" ? aVal - bVal : bVal - aVal;
+  });
+
+  const topMeals = sortedMeals.slice(0, limit);
+
+  const sortLabels: Record<string, string> = {
+    calories: "calóricas",
+    protein: "proteicas",
+    carbs: "ricas em carboidratos",
+    fat: "gordurosas",
+    date: "recentes",
+  };
+
+  const lines: string[] = [];
+  lines.push(`🏆 *Top ${topMeals.length} refeições mais ${sortLabels[sortBy] || sortBy}:*\n`);
+
+  topMeals.forEach((m, index) => {
+    const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+    lines.push(`${medal} *${formatDateBR(m.createdAt)}*`);
+    for (const item of m.items) {
+      lines.push(`   • ${item.foodName} (${item.servingSize})`);
+    }
+    lines.push(`   📊 *${m.totalCalories.toFixed(0)} kcal* | P: ${m.totalProtein.toFixed(0)}g | C: ${m.totalCarbs.toFixed(0)}g | G: ${m.totalFat.toFixed(0)}g`);
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
+/**
+ * Executes the lookup_meal_history tool
+ */
+async function executeLookupMealHistoryTool(userId: string, query: MealHistoryQuery): Promise<string> {
+  console.log(`📜 Looking up meal history:`, query);
+
+  // Parse dates
+  const startDate = new Date(query.start_date);
+  startDate.setHours(0, 0, 0, 0);
+
+  const endDate = new Date(query.end_date);
+  endDate.setHours(23, 59, 59, 999);
+
+  // Fetch meals
+  const meals = await fetchMealsWithItems(userId, startDate, endDate);
+
+  console.log(`📊 Found ${meals.length} meals in date range`);
+
+  // Format response based on query type
+  switch (query.query_type) {
+    case "list_meals":
+      return formatMealListResponse(meals);
+
+    case "daily_summary":
+    case "period_summary":
+      return formatSummaryResponse(meals, startDate, endDate);
+
+    case "top_meals":
+      return formatTopMealsResponse(
+        meals,
+        query.sort_by || "calories",
+        query.limit || 5,
+        query.sort_order || "desc"
+      );
+
+    default:
+      return formatMealListResponse(meals);
+  }
+}
+
+// ============================================================================
 // Message Processing
 // ============================================================================
 
@@ -540,9 +865,13 @@ async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
 
     console.log(`📚 Loaded ${openaiMessages.length} messages from history`);
 
-    // Build the messages array for OpenAI
-    const messages: ChatCompletionMessageParam[] = [
-      { role: "system", content: SYSTEM_PROMPT },
+    // Get current date for context (helps OpenAI determine "today", "yesterday", etc.)
+    const currentDate = new Date().toISOString().split("T")[0];
+    const messagesWithDate: ChatCompletionMessageParam[] = [
+      { 
+        role: "system", 
+        content: `${SYSTEM_PROMPT}\n\nData atual: ${currentDate}` 
+      },
       ...openaiMessages,
       { role: "user", content: messageText },
     ];
@@ -550,8 +879,8 @@ async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
     // Call OpenAI with tools
     let response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages,
-      tools: [ANALYZE_MEAL_TOOL],
+      messages: messagesWithDate,
+      tools: TOOLS,
       tool_choice: "auto",
       temperature: 0.7,
     });
@@ -563,28 +892,34 @@ async function processIncomingMessage(message: WhatsAppMessage): Promise<void> {
       console.log(`🔧 Tool calls requested: ${assistantMessage.tool_calls.length}`);
 
       // Add assistant's message with tool calls to the conversation
-      messages.push(assistantMessage);
+      messagesWithDate.push(assistantMessage);
 
       // Execute each tool call
       for (const toolCall of assistantMessage.tool_calls) {
-        if (toolCall.function.name === "analyze_meal") {
-          const args = JSON.parse(toolCall.function.arguments);
-          const toolResult = await executeAnalyzeMealTool(dbUser.id, args.meal_description);
+        const args = JSON.parse(toolCall.function.arguments);
+        let toolResult: string;
 
-          // Add tool result to messages
-          messages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: toolResult,
-          });
+        if (toolCall.function.name === "analyze_meal") {
+          toolResult = await executeAnalyzeMealTool(dbUser.id, args.meal_description);
+        } else if (toolCall.function.name === "lookup_meal_history") {
+          toolResult = await executeLookupMealHistoryTool(dbUser.id, args as MealHistoryQuery);
+        } else {
+          toolResult = "Ferramenta desconhecida.";
         }
+
+        // Add tool result to messages
+        messagesWithDate.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: toolResult,
+        });
       }
 
       // Get the next response from OpenAI
       response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
-        messages,
-        tools: [ANALYZE_MEAL_TOOL],
+        messages: messagesWithDate,
+        tools: TOOLS,
         tool_choice: "auto",
         temperature: 0.7,
       });
